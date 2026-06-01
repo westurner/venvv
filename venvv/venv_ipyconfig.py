@@ -66,7 +66,6 @@ Venv Implementation
 import collections
 import copy
 import difflib
-import distutils.spawn
 import functools
 import inspect
 import itertools
@@ -81,6 +80,11 @@ import unittest
 
 from collections import OrderedDict
 from os.path import join as joinpath
+
+try:
+    from shutil import which as  _which
+except ImportError:
+    from distutils.spawn import find_executable as _which
 
 # try/except imports for IPython
 # import IPython
@@ -850,7 +854,7 @@ if __name__ == "__main__":
         """}}\n"""
         """{bash_compl_name} () {{\n"""
         """    local cur="$2";\n"""
-        """    COMPREPLY=($({bash_func_name} && compgen -d -- "${{cur}}" ))\n"""
+        """    COMPREPLY=($({bash_func_name} || return && compgen -d -- "${{cur}}" ))\n"""
         """}}\n"""
     )
     BASH_ALIAS_TEMPLATE = (
@@ -1653,9 +1657,9 @@ def build_user_aliases_env(env=None,
 
     def build_editor_env(env):
         # EDITOR configuration
-        env['VIMBIN']       = distutils.spawn.find_executable('vim')
-        env['GVIMBIN']      = distutils.spawn.find_executable('gvim')
-        env['MVIMBIN']      = distutils.spawn.find_executable('mvim')
+        env['VIMBIN']       = _which('vim')
+        env['GVIMBIN']      = _which('gvim')
+        env['MVIMBIN']      = _which('mvim')
         env['GUIVIMBIN']    = env.get('GVIMBIN', env.get('MVIMBIN'))
         # set the current vim servername to _APP
         VIMSERVER = '/'
@@ -1748,7 +1752,7 @@ def build_user_aliases_env(env=None,
                     __IS_MAC=shell_varquote('__IS_MAC')),
                 name='lsw',
                 complfuncstr="""local cur=${2};
-                COMPREPLY=($(cd ${_WRD}; compgen -f -- ${cur}));"""
+                COMPREPLY=($(cd "${_WRD}" || return; compgen -f -- "${cur}"));"""
             )
 
             aliases['findw'] = 'find {_WRD}'.format(
@@ -1779,11 +1783,12 @@ def build_user_aliases_env(env=None,
     def build_python_testing_env(env):
         aliases = env.aliases
         env['_PYBIN'] = env.get('_PYBIN', 'python')
-        aliases['testpyw'] = '(cd "${_WRD}" && "${_PYBIN}" setup.py test)'
+        env['_TESTPY_'] = "(cd {_WRD} && python setup.py test)".format(
+            _WRD=shell_varquote('_WRD'),
+            )
+        aliases['testpyw'] = env['_TESTPY_']
         aliases['testpywr'] = 'reset && %s' % env['_TESTPY_']
         aliases['nosew'] = '(cd {_WRD} && nosetests %l)'.format(
-            _WRD=shell_varquote('_WRD'))
-        aliases['pytestw'] = '(cd {_WRD} && pytest -v %l)'.format(
             _WRD=shell_varquote('_WRD'))
         return env
 
@@ -3219,7 +3224,7 @@ class Venv(object):
             '--command', "bash -c 'we %s %s'; bash" % (
                 self.env['VIRTUAL_ENV'], self.env['_APP']),  #
             '--tab', '--title', '%s: shell' % self.env['_APP'],
-            '--command', "bash -c %r; bash" % self.env['_SHELL_']
+            '--command', "bash -c %r; bash" % self._terminal_cmd(),
         )
         return cmd
 
@@ -3292,7 +3297,7 @@ class Venv(object):
         environ.update((k, str(v)) for (k, v) in venv.env.environ.items())
         return environ
 
-    def call(self, command):
+    def call(self, command, cwd=None, shell=True):
         """
         Args:
             command (str): command to run
@@ -3306,14 +3311,16 @@ class Venv(object):
             raise ConfigException("VENVPREFIX is None")
         config = {
             'command': command,
-            'shell': True,
+            'shell': shell,
             #'env': env,
             'VENVPREFIX': VENVPREFIX,
-            'cwd': VENVPREFIX}
+            'cwd': VENVPREFIX if cwd is None else cwd}
         logevent('subprocess.call', config, level=logging.INFO)
         config.pop('command')
         config.pop('VENVPREFIX')
-        return subprocess.call(command + " #venv.call", **config)
+        if isinstance(command, str):
+            command = command + "  #venv.call"
+        return subprocess.call(command, **config)
 
 
 def get_IPYTHON_ALIAS_DEFAULTS(platform=None):
